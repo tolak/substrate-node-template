@@ -4,8 +4,15 @@
 /// Learn more about FRAME and the core library of Substrate FRAME pallets:
 /// https://substrate.dev/docs/en/knowledgebase/runtime/frame
 
-use frame_support::{decl_module, decl_storage, decl_event, decl_error, dispatch, traits::Get};
-use frame_system::ensure_signed;
+use frame_support::{decl_module, decl_storage, decl_event, decl_error, debug, dispatch, traits::Get, Parameter};
+use frame_system::{ensure_root, ensure_signed};
+use sp_std::{prelude::*, fmt::Debug};
+use sp_runtime::{
+	traits::{AtLeast32Bit, MaybeSerializeDeserialize, MaybeDisplay, Member},
+	RuntimeDebug,
+};
+
+use codec::{Decode, Encode};
 
 #[cfg(test)]
 mod mock;
@@ -17,6 +24,8 @@ mod tests;
 pub trait Trait: frame_system::Trait {
 	/// Because this pallet emits events, it depends on the runtime's definition of an event.
 	type Event: From<Event<Self>> + Into<<Self as frame_system::Trait>::Event>;
+
+	type Balance: Parameter + Member + AtLeast32Bit + Default + Copy + MaybeSerializeDeserialize;
 }
 
 // The pallet's runtime storage items.
@@ -29,16 +38,42 @@ decl_storage! {
 		// Learn more about declaring storage items:
 		// https://substrate.dev/docs/en/knowledgebase/runtime/storage#declaring-storage-items
 		Something get(fn something): Option<u32>;
+		
+		/// The current set of members, ordered.
+		pub Members get(fn members) build(|config: &GenesisConfig<T>| {
+			let mut m = config.members.clone();
+			m.sort();
+			m
+		}): Vec<T::AccountId>;
+
+		/// The balance of memebers
+		pub Balances get(fn balances): map hasher(twox_64_concat) T::AccountId => T::Balance;
+
+	}
+
+	add_extra_genesis {
+		config(members): Vec<T::AccountId>;
 	}
 }
 
 // Pallets use events to inform users when important changes are made.
 // https://substrate.dev/docs/en/knowledgebase/runtime/events
 decl_event!(
-	pub enum Event<T> where AccountId = <T as frame_system::Trait>::AccountId {
-		/// Event documentation should end with an array that provides descriptive names for event
-		/// parameters. [something, who]
-		SomethingStored(u32, AccountId),
+	pub enum Event<T> where 
+		AccountId = <T as frame_system::Trait>::AccountId,
+		Balance = <T as Trait>::Balance
+	{
+		/// Event documentation should end with an array that provides descriptive names for event. [something, who]
+		SomethingStored(u32),
+
+		/// Add account into member list. [member]
+		MemberAdded(AccountId),
+
+		/// Remove account from memeber list. [member]
+		MemberRemoved(AccountId),
+
+		/// Update balance of memebers. [member, old_balance, new_balance]
+		BalanceUpdated(AccountId, Balance, Balance),
 	}
 );
 
@@ -76,7 +111,7 @@ decl_module! {
 			Something::put(something);
 
 			// Emit an event.
-			Self::deposit_event(RawEvent::SomethingStored(something, who));
+			Self::deposit_event(RawEvent::SomethingStored(something));
 			// Return a successful DispatchResult
 			Ok(())
 		}
@@ -97,6 +132,39 @@ decl_module! {
 					Something::put(new);
 					Ok(())
 				},
+			}
+		}
+
+		/// Method to insert account into member list.
+		#[weight = 10]
+		pub fn insert_member(origin, member: T::AccountId) {
+			ensure_root(origin)?;
+
+			// if memeber doesn't exist, insert into member list
+			if let Some(pos) = Self::members().iter().position(|x| *x == member) {
+				debug::info!("Member {:?} already exist in memeber list.", member);
+			} else {
+				let mut members = Self::members();
+				members.push(member.clone());
+				<Members::<T>>::put(members);
+
+				Self::deposit_event(RawEvent::MemberAdded(member.clone()));
+				debug::info!("New member {:?} has been added into memeber list.", member);
+			}
+		}
+
+		/// Method to remove account from member list
+		#[weight = 10]
+		pub fn remove_member(origin, member: T::AccountId) {
+			ensure_root(origin)?;
+
+			
+			let mut members = Self::members();
+			if let Some(pos) = Self::members().iter().position(|x| *x == member) {
+				members.remove(pos);
+				<Members::<T>>::put(members);
+				Self::deposit_event(RawEvent::MemberRemoved(member.clone()));
+				debug::info!("New member {:?} has been removed from memeber list.", member);
 			}
 		}
 	}
