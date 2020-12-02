@@ -4,7 +4,10 @@
 /// Learn more about FRAME and the core library of Substrate FRAME pallets:
 /// https://substrate.dev/docs/en/knowledgebase/runtime/frame
 
-use frame_support::{ensure, decl_module, decl_storage, decl_event, decl_error, debug, dispatch, traits::Get, Parameter};
+use frame_support::{ensure, decl_module, decl_storage, decl_event, decl_error, debug, dispatch, 
+	traits::{Get, Currency, ExistenceRequirement, WithdrawReason}, 
+	Parameter
+};
 use frame_system::{ensure_root, ensure_signed};
 use sp_std::{prelude::*, fmt::Debug};
 use sp_runtime::{
@@ -20,12 +23,17 @@ mod mock;
 #[cfg(test)]
 mod tests;
 
+type BalanceOf<T> =
+	<<T as Trait>::OwnedCurrency as Currency<<T as frame_system::Trait>::AccountId>>::Balance;
+
 /// Configure the pallet by specifying the parameters and types on which it depends.
 pub trait Trait: frame_system::Trait {
 	/// Because this pallet emits events, it depends on the runtime's definition of an event.
 	type Event: From<Event<Self>> + Into<<Self as frame_system::Trait>::Event>;
 
 	type Balance: Parameter + Member + AtLeast32BitUnsigned + Default + Copy + MaybeSerializeDeserialize;
+
+	type OwnedCurrency: Currency<Self::AccountId>;
 }
 
 // The pallet's runtime storage items.
@@ -43,12 +51,12 @@ decl_storage! {
 		pub Members get(fn members): Vec<T::AccountId>;
 
 		/// The balance of memebers
-		pub Balances get(fn balances): map hasher(twox_64_concat) T::AccountId => T::Balance;
+		pub Balances get(fn balances): map hasher(twox_64_concat) T::AccountId => BalanceOf<T>;
 
 	}
 
 	add_extra_genesis {
-		config(balances): Vec<(T::AccountId, T::Balance)>;
+		config(balances): Vec<(T::AccountId, BalanceOf<T>)>;
 		config(members): Vec<T::AccountId>;
 		build(|config: &GenesisConfig<T>| {
 			for &(ref who, balance) in config.balances.iter() {
@@ -71,7 +79,7 @@ decl_storage! {
 decl_event!(
 	pub enum Event<T> where 
 		AccountId = <T as frame_system::Trait>::AccountId,
-		Balance = <T as Trait>::Balance
+		Balance = BalanceOf<T>
 	{
 		/// Event documentation should end with an array that provides descriptive names for event. [something, who]
 		SomethingStored(u32),
@@ -185,13 +193,13 @@ decl_module! {
 
 		/// Method to add balance of given account
 		#[weight = 10]
-		pub fn balance_add(origin, balance: T::Balance) -> DispatchResult {
+		pub fn balance_add(origin, balance: BalanceOf<T>) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 
 			ensure!(Balances::<T>::contains_key(who.clone()), Error::<T>::UserDoesNotExist);
 
-			let mut old_value: T::Balance = 0.into();
-			let mut new_value: T::Balance = 0.into();
+			let mut old_value: BalanceOf<T> = 0.into();
+			let mut new_value: BalanceOf<T> = 0.into();
 			Balances::<T>::mutate(who.clone(), |b| -> DispatchResult {
 				old_value = *b;
 				*b = b.checked_add(&balance).ok_or(Error::<T>::BalanceOverFlow)?;
@@ -200,6 +208,8 @@ decl_module! {
 				Ok(())
 			})?;
 
+			T::OwnedCurrency::deposit_creating(&who, balance);
+
 			// Emit transfer event.
 			Self::deposit_event(RawEvent::BalanceUpdated(who.clone(), old_value, new_value));
 			Ok(())
@@ -207,13 +217,13 @@ decl_module! {
 
 		/// Method to sub balance of given account
 		#[weight = 10]
-		pub fn balance_sub(origin, balance: T::Balance) -> DispatchResult {
+		pub fn balance_sub(origin, balance: BalanceOf<T>) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 
 			ensure!(Balances::<T>::contains_key(who.clone()), Error::<T>::UserDoesNotExist);
 
-			let mut old_value: T::Balance = 0.into();
-			let mut new_value: T::Balance = 0.into();
+			let mut old_value: BalanceOf<T> = 0.into();
+			let mut new_value: BalanceOf<T> = 0.into();
 			Balances::<T>::mutate(who.clone(), |b| -> DispatchResult {
 				old_value = *b;
 				*b = b.checked_sub(&balance).ok_or(Error::<T>::BalanceInsufficient)?;
@@ -221,6 +231,14 @@ decl_module! {
 
 				Ok(())
 			})?;
+
+			let _ = T::OwnedCurrency::withdraw(
+				&who,
+				balance,
+				WithdrawReason::Transfer.into(),
+				ExistenceRequirement::AllowDeath,
+			)?;
+
 
 			// Emit transfer event.
 			Self::deposit_event(RawEvent::BalanceUpdated(who.clone(), old_value, new_value));
@@ -230,7 +248,7 @@ decl_module! {
 
 		/// Method to insert account with given balance
 		#[weight = 10]
-		pub fn insert_account(origin, balance: T::Balance) -> DispatchResult {
+		pub fn insert_account(origin, balance: BalanceOf<T>) -> DispatchResult {
 
 			let who = ensure_signed(origin)?;
 			if !Balances::<T>::contains_key(who.clone()) {

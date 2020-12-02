@@ -265,6 +265,7 @@ impl pallet_sudo::Trait for Runtime {
 impl pallet_template::Trait for Runtime {
 	type Event = Event;
 	type Balance = Balance;
+	type OwnedCurrency = Balances;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.
