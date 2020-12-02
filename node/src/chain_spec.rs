@@ -154,7 +154,8 @@ fn testnet_genesis(
 			key: root_key,
 		}),
 		pallet_template: Some(TemplateModuleConfig {
-			members: endowed_accounts,
+			balances: endowed_accounts.iter().cloned().map(|k|(k, 1 << 60)).collect(),
+			members: endowed_accounts.clone(),
 		}),
 	}
 }

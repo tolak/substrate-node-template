@@ -4,12 +4,12 @@
 /// Learn more about FRAME and the core library of Substrate FRAME pallets:
 /// https://substrate.dev/docs/en/knowledgebase/runtime/frame
 
-use frame_support::{decl_module, decl_storage, decl_event, decl_error, debug, dispatch, traits::Get, Parameter};
+use frame_support::{ensure, decl_module, decl_storage, decl_event, decl_error, debug, dispatch, traits::Get, Parameter};
 use frame_system::{ensure_root, ensure_signed};
 use sp_std::{prelude::*, fmt::Debug};
 use sp_runtime::{
-	traits::{AtLeast32Bit, MaybeSerializeDeserialize, MaybeDisplay, Member},
-	RuntimeDebug,
+	traits::{AtLeast32BitUnsigned, MaybeSerializeDeserialize, MaybeDisplay, Member, CheckedAdd, CheckedSub},
+	RuntimeDebug, DispatchResult
 };
 
 use codec::{Decode, Encode};
@@ -25,7 +25,7 @@ pub trait Trait: frame_system::Trait {
 	/// Because this pallet emits events, it depends on the runtime's definition of an event.
 	type Event: From<Event<Self>> + Into<<Self as frame_system::Trait>::Event>;
 
-	type Balance: Parameter + Member + AtLeast32Bit + Default + Copy + MaybeSerializeDeserialize;
+	type Balance: Parameter + Member + AtLeast32BitUnsigned + Default + Copy + MaybeSerializeDeserialize;
 }
 
 // The pallet's runtime storage items.
@@ -40,11 +40,7 @@ decl_storage! {
 		Something get(fn something): Option<u32>;
 		
 		/// The current set of members, ordered.
-		pub Members get(fn members) build(|config: &GenesisConfig<T>| {
-			let mut m = config.members.clone();
-			m.sort();
-			m
-		}): Vec<T::AccountId>;
+		pub Members get(fn members): Vec<T::AccountId>;
 
 		/// The balance of memebers
 		pub Balances get(fn balances): map hasher(twox_64_concat) T::AccountId => T::Balance;
@@ -52,7 +48,21 @@ decl_storage! {
 	}
 
 	add_extra_genesis {
+		config(balances): Vec<(T::AccountId, T::Balance)>;
 		config(members): Vec<T::AccountId>;
+		build(|config: &GenesisConfig<T>| {
+			for &(ref who, balance) in config.balances.iter() {
+				assert!(
+					balance >= 1.into(),
+					"the balance of any account should always be more than existential deposit.",
+				);
+				Balances::<T>::insert(who, balance);
+			}
+
+			let mut m = config.members.clone();
+			m.sort();
+			Members::<T>::put(m);
+		});
 	}
 }
 
@@ -84,6 +94,12 @@ decl_error! {
 		NoneValue,
 		/// Errors should have helpful documentation associated with them.
 		StorageOverflow,
+		/// Erros user does not exist when change balance
+		UserDoesNotExist,
+		/// Erros banalce overflow
+		BalanceOverFlow,
+		/// Erros balance insufficient
+		BalanceInsufficient,
 	}
 }
 
@@ -158,7 +174,6 @@ decl_module! {
 		pub fn remove_member(origin, member: T::AccountId) {
 			ensure_root(origin)?;
 
-			
 			let mut members = Self::members();
 			if let Some(pos) = Self::members().iter().position(|x| *x == member) {
 				members.remove(pos);
@@ -166,6 +181,63 @@ decl_module! {
 				Self::deposit_event(RawEvent::MemberRemoved(member.clone()));
 				debug::info!("New member {:?} has been removed from memeber list.", member);
 			}
+		}
+
+		/// Method to add balance of given account
+		#[weight = 10]
+		pub fn balance_add(origin, balance: T::Balance) -> DispatchResult {
+			let who = ensure_signed(origin)?;
+
+			ensure!(Balances::<T>::contains_key(who.clone()), Error::<T>::UserDoesNotExist);
+
+			let mut old_value: T::Balance = 0.into();
+			let mut new_value: T::Balance = 0.into();
+			Balances::<T>::mutate(who.clone(), |b| -> DispatchResult {
+				old_value = *b;
+				*b = b.checked_add(&balance).ok_or(Error::<T>::BalanceOverFlow)?;
+				new_value = *b;
+
+				Ok(())
+			})?;
+
+			// Emit transfer event.
+			Self::deposit_event(RawEvent::BalanceUpdated(who.clone(), old_value, new_value));
+			Ok(())
+		}
+
+		/// Method to sub balance of given account
+		#[weight = 10]
+		pub fn balance_sub(origin, balance: T::Balance) -> DispatchResult {
+			let who = ensure_signed(origin)?;
+
+			ensure!(Balances::<T>::contains_key(who.clone()), Error::<T>::UserDoesNotExist);
+
+			let mut old_value: T::Balance = 0.into();
+			let mut new_value: T::Balance = 0.into();
+			Balances::<T>::mutate(who.clone(), |b| -> DispatchResult {
+				old_value = *b;
+				*b = b.checked_sub(&balance).ok_or(Error::<T>::BalanceInsufficient)?;
+				new_value = *b;
+
+				Ok(())
+			})?;
+
+			// Emit transfer event.
+			Self::deposit_event(RawEvent::BalanceUpdated(who.clone(), old_value, new_value));
+
+			Ok(())
+		}
+
+		/// Method to insert account with given balance
+		#[weight = 10]
+		pub fn insert_account(origin, balance: T::Balance) -> DispatchResult {
+
+			let who = ensure_signed(origin)?;
+			if !Balances::<T>::contains_key(who.clone()) {
+				Balances::<T>::insert(who.clone(), balance);
+			}
+
+			Ok(())
 		}
 	}
 }
