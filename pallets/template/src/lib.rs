@@ -208,7 +208,7 @@ decl_module! {
 				Ok(())
 			})?;
 
-			T::OwnedCurrency::deposit_creating(&who, balance);
+			let _ = T::OwnedCurrency::deposit_creating(&who, balance);
 
 			// Emit transfer event.
 			Self::deposit_event(RawEvent::BalanceUpdated(who.clone(), old_value, new_value));
